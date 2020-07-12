@@ -16,6 +16,7 @@ from transplanted import Ui_transplanted
 from status import Ui_status_window
 from kill_rabbit import Ui_kill_window
 from settings_finance import Ui_settings_finanse
+from finance_chart_bar import MplCanvas
 
 
 conn = sqlite3.connect('rabbitDB.db')
@@ -129,7 +130,7 @@ cursor.execute(
     number real,
     categories text,
     note text,
-    date text
+    record_date text
     )
     """
 )
@@ -1167,6 +1168,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.setupUi(self)
         self.setWindowTitle('КК- Кибер Кролики')
         self.table_selection.addItems(('Кролики', 'Гнёзда'))
+        self.comboBox_diagram.addItems(("Все финансы", "Расходы", "Доходы"))
         self.dateEdit.setDate(datetime.datetime.today())
         self.dateEdit.setCalendarPopup(True)
         default_settings()
@@ -1177,10 +1179,12 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.growing()
         self.vaccinations()
         self.weigh()
-        self.label.deleteLater()
         self.records_finance()
         self.check_finance_combox()
-        self.saldo_table()
+        self.sc = 0
+        self.chart_bar = QtWidgets.QVBoxLayout(self.widget_for_pie)
+        self.saldo_chart_bar()
+
 
         """Нажатие кнопок"""
         self.btn_add_rabbit.clicked.connect(self.show_add_rabbit)
@@ -1198,6 +1202,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.btn_save_finance.clicked.connect(self.save_finance)
         self.comboBox_diagram.currentTextChanged.connect(self.check_finance_combox)
         self.toolButton.clicked.connect(self.show_settings_fin_window)
+        self.btn_hide_done.clicked.connect(self.update_tast_and_table)
 
     """ Вызов окон, еще не разобрался как вызывать окна в '__init__' """
     def show_settings_fin_window(self):
@@ -1322,12 +1327,23 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         if self.comboBox_diagram.currentText() == 'Все финансы':
             self.tableWidget_money.clear()
             self.all_finance()
+            try:
+                if self.sc != 0:
+                    self.chart_bar.removeWidget(self.sc)
+                    self.saldo_chart_bar()
+            except:
+                pass
+
         if self.comboBox_diagram.currentText() == 'Расходы':
             self.tableWidget_money.clear()
             self.costs_table()
+            self.chart_bar.removeWidget(self.sc)
+            self.expense_chart_bar()
         if self.comboBox_diagram.currentText() == 'Доходы':
             self.tableWidget_money.clear()
             self.income_table()
+            self.chart_bar.removeWidget(self.sc)
+            self.income_chart_bar()
 
     def all_finance(self):
         count_row_in_record = 1
@@ -1389,43 +1405,96 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
             count_row_in_record += 1
             row = cursor.fetchone()
 
-    def saldo_table(self):
-        costs = 0
-        income = 0
 
-        cursor.execute("""SELECT period FROM settings_finance""")
-        days = cursor.fetchone()[0]
+    def expense_chart_bar(self):
+        cursor.execute("""SELECT period from settings_finance""")
+        period = cursor.fetchone()
+        period = datetime.datetime.today() - datetime.timedelta(days=(period[0]))
+        period = str(period).split(' ')[0]
 
-        cursor.execute("""SELECT number, date FROM finance WHERE form=1""")
+        expense_categories = []
+        expense = []
+
+        cursor.execute(f"""
+                SELECT form, number, categories, record_date from finance
+                WHERE form='0'
+                """)
         row = cursor.fetchone()
         while row is not None:
-            date = datetime.datetime.today() - datetime.timedelta(days=days)
-            if date < datetime.datetime.strptime(row[1], '%Y-%m-%d'):
-                income = round(income+row[0])
-            else:
-                row = None
+            if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу этот костыль)
+                if row[2] not in expense_categories:
+                    expense_categories.append(row[2])
+                    expense.insert(expense_categories.index(row[2]), row[1])
+                else:
+                    expense[expense_categories.index(row[2])] += row[1]
+
             row = cursor.fetchone()
 
-        cursor.execute("""SELECT number, date FROM finance Where form=0""")
+        self.sc = MplCanvas()
+        self.sc.axes.bar(expense_categories, [round(i / (sum(expense) / 100), 2) for i in expense])
+        self.sc.axes.set_ylim([0, 100])
+        self.sc.axes.grid(which='major', linewidth=0.5)
+        self.sc.axes.set_title(f"Процентное соотношение категорий расходов.", fontsize=10)
+        self.chart_bar.addWidget(self.sc)
+        self.show()
+
+    def income_chart_bar(self):
+
+        cursor.execute("""SELECT period from settings_finance""")
+        period = cursor.fetchone()
+        period = datetime.datetime.today() - datetime.timedelta(days=(period[0]))
+        period = str(period).split(' ')[0]
+
+        income_categories = []
+        income = []
+
+        cursor.execute(f"""
+        SELECT form, number, categories, record_date from finance
+        WHERE form='1'
+        """)
         row = cursor.fetchone()
         while row is not None:
-            date = datetime.datetime.today()-datetime.timedelta(days=days)
-            if date < datetime.datetime.strptime(row[1], '%Y-%m-%d'):
-                costs = round(costs+row[0])
-            else:
-                row = None
+            if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу этот костыль)
+                if row[0] == 1:
+                    if row[2] in income_categories:
+                        income[income_categories.index(row[2])] += row[1]
+                    else:
+                        income_categories.append(row[2])
+                        income.insert(income_categories.index(row[2]), row[1])
             row = cursor.fetchone()
 
-        saldo = income + costs
+        self.sc = MplCanvas()
+        self.sc.axes.bar(income_categories, [round(i/(sum(income)/100), 2) for i in income])
+        self.sc.axes.set_ylim([0, 100])
+        self.sc.axes.grid(which='major', linewidth=0.5)
+        self.sc.axes.set_title(f"Процентное соотношение категорий дохода.", fontsize=10)
+        self.chart_bar.addWidget(self.sc)
+        self.show()
 
-        """Заполнение таблицы сальдо"""
-        self.tableWidget_saldo.setColumnCount(1)  # Задает количество колонок в таблице
-        self.tableWidget_saldo.setRowCount(3)
-        self.tableWidget_saldo.setVerticalHeaderLabels(('Баланс', f'Доход за {days}д.', f'Расход за {days}д.'))
-        items = [str(saldo), str(income), str(costs)]
-        for i in range(3):
-            cellinfo = QtWidgets.QTableWidgetItem(items[i])
-            self.tableWidget_saldo.setItem(i-1, 1, cellinfo)
+    def saldo_chart_bar(self):
+        period = datetime.datetime.today() - datetime.timedelta(days=(7))
+        period = str(period).split(' ')[0]
+
+        days = []
+        inc_exp = []
+
+        cursor.execute(f"""
+                SELECT form, number, categories, record_date from finance
+                """)
+        row = cursor.fetchone()
+        while row is not None:
+            if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу
+                days.append(row[3][5:7]+"."+row[3][8:])
+                inc_exp.append(row[1])
+            row = cursor.fetchone()
+
+        self.sc = MplCanvas()
+        self.sc.axes.scatter(days, inc_exp)
+        self.sc.axes.set_ylim([min(inc_exp)-150, max(inc_exp)+150])
+        self.sc.axes.grid(which='major', linewidth=0.5)
+        self.sc.axes.set_title("Доходы/расходы за неделю.", fontsize=10)
+        self.chart_bar.addWidget(self.sc)
+        self.show()
 
     """Оповещения"""
     def pre_birth(self):
@@ -1630,12 +1699,21 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.vaccinations()
         self.weigh()
 
+    def update_tast_and_table(self):
+        self.remove_checkbox
+
+        if self.table_selection.currentText() == 'Кролики':
+            self.tableWidget.clear()
+            self.record_to_main_table()
+        elif self.table_selection.currentText() == 'Гнёзда':
+            self.tableWidget.clear()
+            self.rabbit_litter_table()
+
     def records_finance(self):
         """ Вкладка финансы."""
         cursor.execute("""SELECT categories FROM settings_finance""")
         self.comboBox_categories.addItems(str(cursor.fetchone()[0]).split(','))
         self.lineEdit_TheNote.setText('Без заметки')
-        self.comboBox_diagram.addItems(("Все финансы", "Расходы", "Доходы"))
 
     def save_finance(self):
         """Сохраняет финансы."""
@@ -1651,7 +1729,6 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         cursor.execute("""INSERT INTO finance VALUES(?,?,?,?,?)""", (form, money, categories, note, date))
         conn.commit()
         self.check_finance_combox()
-        self.saldo_table()
 
 
 if __name__ == '__main__':
