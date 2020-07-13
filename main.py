@@ -1484,7 +1484,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         row = cursor.fetchone()
         while row is not None:
             if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу
-                days.append(row[3][5:7]+"."+row[3][8:])
+                days.append(f"{row[3][5:7]}.{row[3][8:]}")
                 inc_exp.append(row[1])
             row = cursor.fetchone()
 
