@@ -16,7 +16,8 @@ from transplanted import Ui_transplanted
 from status import Ui_status_window
 from kill_rabbit import Ui_kill_window
 from settings_finance import Ui_settings_finanse
-
+from finance_chart_bar import MplCanvas
+from change_data import Ui_change_data
 
 conn = sqlite3.connect('rabbitDB.db')
 cursor = conn.cursor()
@@ -27,7 +28,8 @@ cursor.execute(
     cell_number integer,
     gender text,
     arrive text,
-    line text, st integer
+    line text,
+    st integer
     )
     """
 )
@@ -129,7 +131,7 @@ cursor.execute(
     number real,
     categories text,
     note text,
-    date text
+    record_date text
     )
     """
 )
@@ -150,6 +152,7 @@ installation_nest_list = []
 vaccinations_list = []
 weigh_list = []
 count = 1
+id_rabbit_to_change = 0
 
 
 def get_id():
@@ -1019,8 +1022,11 @@ class GUIAddRabbit(QtWidgets.QMainWindow, Ui_Add_rabbit):
         if row is not None:
             while row is not None:
                 if row[5] is None:
-                    self.comboBox_mother_rabbit_litter.addItem('Id-{i}, в клетке №{n}, {d} покрыта, id помета-{ip}'.
-                                                               format(i=row[1], n=get_id()[row[1]], d=row[4], ip=row[0]))
+                    self.comboBox_mother_rabbit_litter.addItem('Id-{i}, в клетке №{n}, {d} покрыта,'
+                                                               ' id помета-{ip}'.format(i=row[1],
+                                                                                        n=get_id()[row[1]],
+                                                                                        d=row[4],
+                                                                                        ip=row[0]))
                 row = cursor.fetchone()
 
         self.count_rabbit_in_nest()
@@ -1160,6 +1166,87 @@ class GUIAddRabbit(QtWidgets.QMainWindow, Ui_Add_rabbit):
         conn.commit()
 
 
+class GUI_change_data(QtWidgets.QMainWindow, Ui_change_data):
+    """Окно редактирования данных"""
+    def __init__(self):
+        super(GUI_change_data, self).__init__()
+        self.setupUi(self)
+        self.setWindowTitle('Редактировать данные')
+        self.current_rabbit = id_rabbit_to_change
+        self.doubleSpinBox_weight.setSingleStep(0.100)
+        self.record_data()
+
+        self.pushButton_save.clicked.connect(self.save_data_change)
+
+    def record_data(self):
+        self.id_rabbit.setNum(self.current_rabbit)
+        cursor.execute(f"""SELECT * FROM rabbit WHERE id_rabbit={self.current_rabbit}""")
+        row = cursor.fetchone()
+        self.spinBox_cell_number.setValue(row[1])
+
+        if row[2] == "Самец":
+            self.comboBox_gender.addItems(["Самец", "Самка"])
+        else:
+            self.comboBox_gender.addItems(["Самка", "Самец"])
+
+        self.dateEdit_arrive.setDate(datetime.datetime.strptime(row[3], "%Y, %m, %d"))
+        self.lineEdit_line.setText(row[4])
+
+        cursor.execute(f"""SELECT * FROM ancestors WHERE id_rabbit={self.current_rabbit}""")
+        row = cursor.fetchone()
+        self.lineEdit_mather.setText(row[1])
+        self.lineEdit_father.setText(row[2])
+
+        cursor.execute(f"""SELECT * FROM more_data WHERE id_rabbit={self.current_rabbit}""")
+        row = cursor.fetchone()
+        self.doubleSpinBox_weight.setValue(row[1])
+        current_status = row[2]
+
+        cursor.execute("""SELECT status FROM settings""")
+        row = cursor.fetchone()
+        list_status = row[0].split(",")
+        list_status.remove(current_status)
+        list_status.insert(0, current_status)
+        self.comboBox_status.addItems(list_status)
+
+        cursor.execute(f"""SELECT note FROM the_note WHERE id_rabbit={self.current_rabbit}""")
+        row = cursor.fetchone()
+        self.plainTextEdit_note.setPlainText(row[0])
+
+    def save_data_change(self):
+        rabbit = self.current_rabbit
+        gender = self.comboBox_gender.currentText()
+        arrive = str(self.dateEdit_arrive.date()).split("(")[1][:-1]
+        mather = self.lineEdit_mather.text()
+        father = self.lineEdit_father.text()
+        line = self.lineEdit_line.text()
+        cell = self.spinBox_cell_number.value()
+        weight = round(self.doubleSpinBox_weight.value(), 2)
+        status = self.comboBox_status.currentText()
+        note = self.plainTextEdit_note.toPlainText()
+
+        cursor.execute(f"""UPDATE rabbit SET
+                                            cell_number={cell},
+                                            gender='{gender}',
+                                            arrive='{arrive}',
+                                            line='{line}'
+                                            WHERE id_rabbit={rabbit}
+                                            """)
+        conn.commit()
+
+        cursor.execute(f"""UPDATE ancestors SET mother_id='{mather}', father_id='{father}' WHERE
+                            id_rabbit={rabbit}""")
+        conn.commit()
+
+        cursor.execute(f"""UPDATE more_data SET mass_rabbit={weight}, status_rabbit='{status}'
+                        WHERE id_rabbit={rabbit}""")
+        conn.commit()
+
+        cursor.execute(f"""UPDATE the_note SET note='{note}' WHERE id_rabbit={rabbit}""")
+        conn.commit()
+        self.close()
+
+
 class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
     """ Главное окно приложения"""
     def __init__(self):
@@ -1167,6 +1254,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.setupUi(self)
         self.setWindowTitle('КК- Кибер Кролики')
         self.table_selection.addItems(('Кролики', 'Гнёзда'))
+        self.comboBox_diagram.addItems(("Все финансы", "Расходы", "Доходы"))
         self.dateEdit.setDate(datetime.datetime.today())
         self.dateEdit.setCalendarPopup(True)
         default_settings()
@@ -1177,10 +1265,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.growing()
         self.vaccinations()
         self.weigh()
-        self.label.deleteLater()
         self.records_finance()
         self.check_finance_combox()
-        self.saldo_table()
+        self.sc = 0
+        self.chart_bar = QtWidgets.QVBoxLayout(self.widget_for_pie)
+        self.saldo_chart_bar()
 
         """Нажатие кнопок"""
         self.btn_add_rabbit.clicked.connect(self.show_add_rabbit)
@@ -1198,6 +1287,16 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.btn_save_finance.clicked.connect(self.save_finance)
         self.comboBox_diagram.currentTextChanged.connect(self.check_finance_combox)
         self.toolButton.clicked.connect(self.show_settings_fin_window)
+        self.btn_hide_done.clicked.connect(self.update_tast_and_table)
+        self.tableWidget.cellDoubleClicked.connect(self.show_change_window)
+
+    def show_change_window(self):
+        """Проверяет открытую вкладку и при кроликах вызывает окно редактирования"""
+        if self.table_selection.currentText() == 'Кролики':
+            row = self.tableWidget.currentRow()
+            global id_rabbit_to_change
+            id_rabbit_to_change = (int((self.tableWidget.item(row, 0)).text()))
+            self.show_change_data_window()
 
     """ Вызов окон, еще не разобрался как вызывать окна в '__init__' """
     def show_settings_fin_window(self):
@@ -1250,6 +1349,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.gui_copulation_window.setWindowModality(QtCore.Qt.ApplicationModal)
         self.gui_copulation_window.show()
 
+    def show_change_data_window(self):
+        self.gui_change_data = GUI_change_data()
+        self.gui_change_data.setWindowModality(QtCore.Qt.ApplicationModal)
+        self.gui_change_data.show()
+
     """Таблицы"""
     def check_table(self):
         if self.table_selection.currentText() == 'Кролики':
@@ -1293,6 +1397,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
             for i in range(8):
                 cellinfo = QtWidgets.QTableWidgetItem(x[i])
                 self.tableWidget.setItem(count_row_in_record-1, i, cellinfo)
+
             count_row_in_record += 1
             row = cursor.fetchone()
 
@@ -1322,12 +1427,23 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         if self.comboBox_diagram.currentText() == 'Все финансы':
             self.tableWidget_money.clear()
             self.all_finance()
+            try:
+                if self.sc != 0:
+                    self.chart_bar.removeWidget(self.sc)
+                    self.saldo_chart_bar()
+            except:
+                pass
+
         if self.comboBox_diagram.currentText() == 'Расходы':
             self.tableWidget_money.clear()
             self.costs_table()
+            self.chart_bar.removeWidget(self.sc)
+            self.expense_chart_bar()
         if self.comboBox_diagram.currentText() == 'Доходы':
             self.tableWidget_money.clear()
             self.income_table()
+            self.chart_bar.removeWidget(self.sc)
+            self.income_chart_bar()
 
     def all_finance(self):
         count_row_in_record = 1
@@ -1389,43 +1505,98 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
             count_row_in_record += 1
             row = cursor.fetchone()
 
-    def saldo_table(self):
-        costs = 0
-        income = 0
+    def expense_chart_bar(self):
+        cursor.execute("""SELECT period from settings_finance""")
+        period = cursor.fetchone()
+        period = datetime.datetime.today() - datetime.timedelta(days=(period[0]))
+        period = str(period).split(' ')[0]
 
-        cursor.execute("""SELECT period FROM settings_finance""")
-        days = cursor.fetchone()[0]
+        expense_categories = []
+        expense = []
 
-        cursor.execute("""SELECT number, date FROM finance WHERE form=1""")
+        cursor.execute(f"""
+                SELECT form, number, categories, record_date from finance
+                WHERE form='0'
+                """)
         row = cursor.fetchone()
         while row is not None:
-            date = datetime.datetime.today() - datetime.timedelta(days=days)
-            if date < datetime.datetime.strptime(row[1], '%Y-%m-%d'):
-                income = round(income+row[0])
-            else:
-                row = None
+            if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу этот костыль)
+                if row[2] not in expense_categories:
+                    expense_categories.append(row[2])
+                    expense.insert(expense_categories.index(row[2]), row[1])
+                else:
+                    expense[expense_categories.index(row[2])] += row[1]
+
             row = cursor.fetchone()
 
-        cursor.execute("""SELECT number, date FROM finance Where form=0""")
+        self.sc = MplCanvas()
+        self.sc.axes.bar(expense_categories, [round(i / (sum(expense) / 100), 2) for i in expense])
+        self.sc.axes.set_ylim([0, 100])
+        self.sc.axes.grid(which='major', linewidth=0.5)
+        self.sc.axes.set_title(f"Процентное соотношение категорий расходов.", fontsize=10)
+        self.chart_bar.addWidget(self.sc)
+        self.show()
+
+    def income_chart_bar(self):
+
+        cursor.execute("""SELECT period from settings_finance""")
+        period = cursor.fetchone()
+        period = datetime.datetime.today() - datetime.timedelta(days=(period[0]))
+        period = str(period).split(' ')[0]
+
+        income_categories = []
+        income = []
+
+        cursor.execute(f"""
+        SELECT form, number, categories, record_date from finance
+        WHERE form='1'
+        """)
         row = cursor.fetchone()
         while row is not None:
-            date = datetime.datetime.today()-datetime.timedelta(days=days)
-            if date < datetime.datetime.strptime(row[1], '%Y-%m-%d'):
-                costs = round(costs+row[0])
-            else:
-                row = None
+            if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу этот костыль)
+                if row[0] == 1:
+                    if row[2] in income_categories:
+                        income[income_categories.index(row[2])] += row[1]
+                    else:
+                        income_categories.append(row[2])
+                        income.insert(income_categories.index(row[2]), row[1])
             row = cursor.fetchone()
 
-        saldo = income + costs
+        self.sc = MplCanvas()
+        self.sc.axes.bar(income_categories, [round(i/(sum(income)/100), 2) for i in income])
+        self.sc.axes.set_ylim([0, 100])
+        self.sc.axes.grid(which='major', linewidth=0.5)
+        self.sc.axes.set_title(f"Процентное соотношение категорий дохода.", fontsize=10)
+        self.chart_bar.addWidget(self.sc)
+        self.show()
 
-        """Заполнение таблицы сальдо"""
-        self.tableWidget_saldo.setColumnCount(1)  # Задает количество колонок в таблице
-        self.tableWidget_saldo.setRowCount(3)
-        self.tableWidget_saldo.setVerticalHeaderLabels(('Баланс', f'Доход за {days}д.', f'Расход за {days}д.'))
-        items = [str(saldo), str(income), str(costs)]
-        for i in range(3):
-            cellinfo = QtWidgets.QTableWidgetItem(items[i])
-            self.tableWidget_saldo.setItem(i-1, 1, cellinfo)
+    def saldo_chart_bar(self):
+        period = datetime.datetime.today() - datetime.timedelta(days=7)
+        period = str(period).split(' ')[0]
+
+        days = []
+        inc_exp = []
+
+        cursor.execute(f"""
+                SELECT form, number, categories, record_date from finance
+                """)
+        row = cursor.fetchone()
+        while row is not None:
+            if row[3] > period:  # через SQL не получилось отсортироватьб (в будующем уберу
+                days.append(f"{row[3][5:7]}.{row[3][8:]}")
+                inc_exp.append(row[1])
+            row = cursor.fetchone()
+
+        self.sc = MplCanvas()
+        self.sc.axes.scatter(days, inc_exp)
+        try:
+            self.sc.axes.set_ylim([min(inc_exp)-150, max(inc_exp)+150])
+        except:
+            pass
+        self.sc.axes.grid(which='major', linewidth=0.5)
+        self.sc.axes.set_title("Доходы/расходы за неделю.", fontsize=10)
+        self.chart_bar.addWidget(self.sc)
+        self.show()
 
     """Оповещения"""
     def pre_birth(self):
@@ -1630,12 +1801,21 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         self.vaccinations()
         self.weigh()
 
+    def update_tast_and_table(self):
+        self.remove_checkbox()
+
+        if self.table_selection.currentText() == 'Кролики':
+            self.tableWidget.clear()
+            self.record_to_main_table()
+        elif self.table_selection.currentText() == 'Гнёзда':
+            self.tableWidget.clear()
+            self.rabbit_litter_table()
+
     def records_finance(self):
         """ Вкладка финансы."""
         cursor.execute("""SELECT categories FROM settings_finance""")
         self.comboBox_categories.addItems(str(cursor.fetchone()[0]).split(','))
         self.lineEdit_TheNote.setText('Без заметки')
-        self.comboBox_diagram.addItems(("Все финансы", "Расходы", "Доходы"))
 
     def save_finance(self):
         """Сохраняет финансы."""
@@ -1651,7 +1831,6 @@ class MainWindow(QtWidgets.QMainWindow, Ui_Main_Window):
         cursor.execute("""INSERT INTO finance VALUES(?,?,?,?,?)""", (form, money, categories, note, date))
         conn.commit()
         self.check_finance_combox()
-        self.saldo_table()
 
 
 if __name__ == '__main__':
